@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 
+	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
 )
 
@@ -33,6 +34,12 @@ var serverCmd = &cobra.Command{
 		}
 		log.Printf("Client connected from %s\n", clientConn.RemoteAddr())
 
+		// Wrap the control connection in a Yamux server session
+		session, err := yamux.Server(clientConn, nil)
+		if err != nil {
+			log.Fatalf("Error creating yamux session: %v", err)
+		}
+
 		// Listen for public internet traffic on publicPort
 		publicAddr := fmt.Sprintf(":%d", publicPort)
 		publicListener, err := net.Listen("tcp", publicAddr)
@@ -41,29 +48,42 @@ var serverCmd = &cobra.Command{
 		}
 		defer publicListener.Close()
 
-		log.Printf("Waiting for public connections on %s...\n", publicAddr)
-		publicConn, err := publicListener.Accept()
-		if err != nil {
-			log.Fatalf("Error accepting public connection: %v", err)
-		}
-		log.Printf("Public connection received from %s\n", publicConn.RemoteAddr())
+		actualPort := publicListener.Addr().(*net.TCPAddr).Port
+		log.Printf("Waiting for public connections on port %d...\n", actualPort)
 
-		// Pipe traffic back and forth (Phase 1: Proof of concept, single request)
-		log.Println("Piping traffic between public connection and client connection...")
-		
-		go func() {
-			_, err := io.Copy(clientConn, publicConn)
+		for {
+			publicConn, err := publicListener.Accept()
 			if err != nil {
-				log.Printf("Error piping public -> client: %v\n", err)
+				log.Printf("Error accepting public connection: %v\n", err)
+				continue
 			}
-			log.Println("Public -> Client stream closed.")
-		}()
+			log.Printf("Public connection received from %s\n", publicConn.RemoteAddr())
 
-		_, err = io.Copy(publicConn, clientConn)
-		if err != nil {
-			log.Printf("Error piping client -> public: %v\n", err)
+			go func(pConn net.Conn) {
+				defer pConn.Close()
+
+				// Open a new logical stream via Yamux
+				stream, err := session.Open()
+				if err != nil {
+					log.Printf("Error opening yamux stream: %v\n", err)
+					return
+				}
+				defer stream.Close()
+
+				go func() {
+					_, err := io.Copy(stream, pConn)
+					if err != nil && err != io.EOF {
+						// log.Printf("Error piping public -> stream: %v\n", err)
+					}
+				}()
+
+				_, err = io.Copy(pConn, stream)
+				if err != nil && err != io.EOF {
+					// log.Printf("Error piping stream -> public: %v\n", err)
+				}
+				log.Println("Stream closed.")
+			}(publicConn)
 		}
-		log.Println("Client -> Public stream closed. Server stopping.")
 	},
 }
 
@@ -71,5 +91,5 @@ func init() {
 	rootCmd.AddCommand(serverCmd)
 
 	serverCmd.Flags().IntVarP(&controlPort, "control-port", "c", 9999, "Port for the local tempok client to connect to")
-	serverCmd.Flags().IntVarP(&publicPort, "public-port", "p", 8000, "Port for public internet traffic")
+	serverCmd.Flags().IntVarP(&publicPort, "public-port", "p", 0, "Port for public internet traffic (default 0 for random)")
 }

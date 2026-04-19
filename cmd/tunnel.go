@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
 )
 
@@ -33,28 +34,46 @@ var tunnelCmd = &cobra.Command{
 		defer serverConn.Close()
 		log.Printf("Connected to server at %s. Waiting for incoming traffic...\n", serverAddr)
 
-		// Connect to the local application
-		localAppAddr := fmt.Sprintf("localhost:%d", localPort)
-		localConn, err := net.Dial("tcp", localAppAddr)
+		// Setup Yamux Client
+		session, err := yamux.Client(serverConn, nil)
 		if err != nil {
-			log.Fatalf("Error connecting to local application %s: %v", localAppAddr, err)
+			log.Fatalf("Error creating yamux client session: %v", err)
 		}
-		defer localConn.Close()
-		log.Printf("Connected to local application at %s. Piping traffic...\n", localAppAddr)
 
-		go func() {
-			_, err := io.Copy(localConn, serverConn)
+		// Accept streams continuously
+		for {
+			stream, err := session.Accept()
 			if err != nil {
-				log.Printf("Error piping server -> local: %v\n", err)
+				log.Fatalf("Yamux session closed: %v", err)
 			}
-			log.Println("Server -> Local stream closed.")
-		}()
+			log.Println("New stream accepted from server.")
 
-		_, err = io.Copy(serverConn, localConn)
-		if err != nil {
-			log.Printf("Error piping local -> server: %v\n", err)
+			go func(stream net.Conn) {
+				defer stream.Close()
+
+				// Connect to the local application
+				localAppAddr := fmt.Sprintf("localhost:%d", localPort)
+				localConn, err := net.Dial("tcp", localAppAddr)
+				if err != nil {
+					log.Printf("Error connecting to local application %s: %v", localAppAddr, err)
+					return
+				}
+				defer localConn.Close()
+				
+				go func() {
+					_, err := io.Copy(localConn, stream)
+					if err != nil && err != io.EOF {
+						// log.Printf("Error piping stream -> local: %v\n", err)
+					}
+				}()
+
+				_, err = io.Copy(stream, localConn)
+				if err != nil && err != io.EOF {
+					// log.Printf("Error piping local -> stream: %v\n", err)
+				}
+				log.Println("Local stream closed.")
+			}(stream)
 		}
-		log.Println("Local -> Server stream closed. Tunnel stopping.")
 	},
 }
 
