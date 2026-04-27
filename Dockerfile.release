@@ -1,0 +1,5 @@
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+COPY tempok /usr/local/bin/tempok
+EXPOSE 9999 80
+ENTRYPOINT ["tempok"]
