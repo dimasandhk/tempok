@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"os"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -31,8 +33,9 @@ var listCmd = &cobra.Command{
 		}
 
 		fmt.Println("Active Tunnels:")
-		fmt.Printf("%-36s %-10s %-15s %s\n", "ID", "PORT", "TTL", "STATUS")
-		fmt.Println("--------------------------------------------------------------------------------")
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "ID\tPORT\tTTL\tSTATUS")
+		fmt.Fprintln(w, "------\t------\t------\t------")
 		for _, t := range resp.Tunnels {
 			status := "Active"
 			ttl := "Forever"
@@ -45,8 +48,9 @@ var listCmd = &cobra.Command{
 					ttl = timeRemaining.Round(time.Second).String()
 				}
 			}
-			fmt.Printf("%-36s %-10d %-15s %s\n", t.ID, t.PublicPort, ttl, status)
+			fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", t.ID, t.PublicPort, ttl, status)
 		}
+		w.Flush()
 	},
 }
 

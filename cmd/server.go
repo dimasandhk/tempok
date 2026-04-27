@@ -8,7 +8,10 @@ import (
 	"log"
 	"net"
 	"net/rpc"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,9 +44,26 @@ var serverCmd = &cobra.Command{
 		}
 		defer controlListener.Close()
 
+		// Setup graceful shutdown
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		go func() {
+			<-sigChan
+			log.Println("Received termination signal. Shutting down gracefully...")
+			controlListener.Close()
+			os.Exit(0)
+		}()
+
 		for {
 			clientConn, err := controlListener.Accept()
 			if err != nil {
+				// Avoid logging an error if it's a shutdown
+				select {
+				case <-sigChan:
+					return
+				default:
+				}
 				log.Printf("Error accepting client connection: %v", err)
 				continue
 			}

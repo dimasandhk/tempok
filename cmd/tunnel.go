@@ -6,7 +6,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 
 	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
@@ -66,6 +69,18 @@ var tunnelCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalf("Error creating yamux client session: %v", err)
 		}
+
+		// Setup graceful shutdown
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		go func() {
+			<-sigChan
+			log.Println("Received termination signal. Closing tunnel gracefully...")
+			session.Close()
+			serverConn.Close()
+			os.Exit(0)
+		}()
 
 		for {
 			stream, err := session.Accept()
