@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,9 +10,12 @@ import (
 
 	"github.com/hashicorp/yamux"
 	"github.com/spf13/cobra"
+	"github.com/dimasandhk/tempok/internal/api"
 )
 
 var serverAddr string
+var tunnelSecret string
+var expires string
 
 var tunnelCmd = &cobra.Command{
 	Use:   "tunnel [local_port]",
@@ -24,23 +28,45 @@ var tunnelCmd = &cobra.Command{
 			log.Fatalf("Invalid local port: %s", localPortStr)
 		}
 
+		if tunnelSecret == "" {
+			log.Fatal("Tunnel requires a --secret flag to connect")
+		}
+
 		log.Printf("Starting tunnel to local port %d via server %s...\n", localPort, serverAddr)
 
-		// Connect to the VM's control port
 		serverConn, err := net.Dial("tcp", serverAddr)
 		if err != nil {
 			log.Fatalf("Error connecting to server %s: %v", serverAddr, err)
 		}
 		defer serverConn.Close()
+
+		// Perform handshake
+		encoder := json.NewEncoder(serverConn)
+		req := api.HandshakeRequest{
+			Secret: tunnelSecret,
+			Type:   "tunnel",
+		}
+		if err := encoder.Encode(req); err != nil {
+			log.Fatalf("Error sending handshake: %v", err)
+		}
+
+		decoder := json.NewDecoder(serverConn)
+		var resp api.HandshakeResponse
+		if err := decoder.Decode(&resp); err != nil {
+			log.Fatalf("Error reading handshake response: %v", err)
+		}
+
+		if resp.Error != "" {
+			log.Fatalf("Server rejected connection: %s", resp.Error)
+		}
+
 		log.Printf("Connected to server at %s. Waiting for incoming traffic...\n", serverAddr)
 
-		// Setup Yamux Client
 		session, err := yamux.Client(serverConn, nil)
 		if err != nil {
 			log.Fatalf("Error creating yamux client session: %v", err)
 		}
 
-		// Accept streams continuously
 		for {
 			stream, err := session.Accept()
 			if err != nil {
@@ -51,7 +77,6 @@ var tunnelCmd = &cobra.Command{
 			go func(stream net.Conn) {
 				defer stream.Close()
 
-				// Connect to the local application
 				localAppAddr := fmt.Sprintf("localhost:%d", localPort)
 				localConn, err := net.Dial("tcp", localAppAddr)
 				if err != nil {
@@ -59,18 +84,12 @@ var tunnelCmd = &cobra.Command{
 					return
 				}
 				defer localConn.Close()
-				
+
 				go func() {
-					_, err := io.Copy(localConn, stream)
-					if err != nil && err != io.EOF {
-						// log.Printf("Error piping stream -> local: %v\n", err)
-					}
+					io.Copy(localConn, stream)
 				}()
 
-				_, err = io.Copy(stream, localConn)
-				if err != nil && err != io.EOF {
-					// log.Printf("Error piping local -> stream: %v\n", err)
-				}
+				io.Copy(stream, localConn)
 				log.Println("Local stream closed.")
 			}(stream)
 		}
@@ -81,4 +100,6 @@ func init() {
 	rootCmd.AddCommand(tunnelCmd)
 
 	tunnelCmd.Flags().StringVarP(&serverAddr, "server", "s", "localhost:9999", "Address of the Tempok server's control port")
+	tunnelCmd.Flags().StringVar(&tunnelSecret, "secret", "", "Secret required to authenticate to server")
+	tunnelCmd.Flags().StringVar(&expires, "expires", "1h", "Time to live for the tunnel (e.g. 30m, 1h)")
 }
