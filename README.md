@@ -31,8 +31,8 @@ Extract the archive and place the `tempok` executable in your `$PATH`.
 ### Option 2: Run via Docker (For the Server)
 Tempok provides a minimal Docker image, perfect for running the server on a VPS.
 ```bash
-docker pull dimasandhk/tempok:latest
-docker run -d -p 9999:9999 -p 80:80 --name tempok-server dimasandhk/tempok:latest server --secret "your-strong-secret" --control-port 9999 --public-port 80
+docker pull ghcr.io/dimasandhk/tempok:latest
+docker run -d -p 9999:9999 -p 80:80 --name tempok-server ghcr.io/dimasandhk/tempok:latest server --secret "your-strong-secret" --control-port 9999 --public-port 80
 ```
 
 ### Option 3: Build from Source
